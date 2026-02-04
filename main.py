@@ -97,7 +97,7 @@ def analyze_audio_fast(audio_bytes: bytes):
         classification = "HUMAN" if is_ai else "AI GENERATED"
         
         # Dynamic Explanation Generator
-        if is_ai:
+        if not is_ai:
             explanation = (
                 f"Signal lacks dynamic range (Variance: {amplitude_variance:.4f}). "
                 f"Zero-crossing rate ({zcr_rate:.3f}) suggests synthetic waveform generation."
@@ -154,4 +154,5 @@ async def detect_voice(
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
 
