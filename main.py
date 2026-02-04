@@ -94,7 +94,7 @@ def analyze_audio_fast(audio_bytes: bytes):
         # Classification Threshold
         is_ai = final_score > 0.60
         
-        classification = "AI_GENERATED" if is_ai else "HUMAN"
+        classification = "HUMAN" if is_ai else "AI GENERATED"
         
         # Dynamic Explanation Generator
         if is_ai:
@@ -154,3 +154,4 @@ async def detect_voice(
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
