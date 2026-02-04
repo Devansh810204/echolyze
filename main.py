@@ -67,65 +67,49 @@ def analyze_audio_fast(audio_bytes: bytes):
         silence_count = np.sum(np.abs(data) < silence_threshold)
         silence_ratio = silence_count / len(data)
 
-        # --- DETERMINISTIC LOGIC (Improved) ---
+        # --- DETERMINISTIC LOGIC ---
         
-        # Base Probability of being AI starts neutral
-        ai_probability = 0.5
+        # Heuristic: 
+        # - AI has lower variance (very consistent volume).
+        # - AI often has higher "roughness" in ZCR or oddly low silence.
         
-        # Factor 1: Amplitude Variance (Dynamic Range)
+        # Base Score Calculation
+        score = 0.5
+        
+        # Factor 1: Variance Check (Human = High Variance)
         if amplitude_variance < 0.005: 
-            ai_probability += 0.25  # Stronger push for AI
-        elif amplitude_variance > 0.02:
-            ai_probability -= 0.20  # Stronger push for Human
+            score -= 0.20 # Likely AI (Too flat)
+        else:
+            score += 0.15 # Likely Human (Dynamic)
 
-        # Factor 2: ZCR Check (Texture)
-        if zcr_rate > 0.10:
-            ai_probability -= 0.15  # Likely Human
-        elif zcr_rate < 0.03:
-            ai_probability += 0.20  # Likely AI
+        # Factor 2: ZCR Check
+        if zcr_rate > 0.15:
+            score -= 0.10 # Likely Human (Breath sounds)
+        elif zcr_rate < 0.02:
+            score += 0.15 # Likely AI (Too tonal)
 
-        # Factor 3: Silence Ratio (Dead Air)
-        if silence_ratio > 0.4:  
-            ai_probability += 0.15 # Too much silence = Suspicious
-        elif silence_ratio < 0.05:
-            ai_probability -= 0.10 # Continuous background noise = Human
-
-        # Clamp Probability (0.01 to 0.99)
-        ai_probability = max(0.01, min(0.99, ai_probability))
+        # Clamp Score (0.01 to 0.99)
+        final_score = max(0.01, min(0.99, score))
         
         # Classification Threshold
-        is_ai = ai_probability > 0.55
+        is_ai = final_score > 0.60
         
-        # FIX: Ensure logic is not reversed
         classification = "HUMAN" if is_ai else "AI GENERATED"
-        
-        # --- SCORE FLIPPING (CRITICAL FIX) ---
-        if is_ai:
-            final_confidence = ai_probability
-        else:
-            # If Human, we flip the AI probability to get Human Confidence
-            # e.g., 0.15 AI probability = 0.85 Human Confidence
-            final_confidence = 1.0 - ai_probability
-            
-        # Optional: Boost mid-range confidence to look authoritative
-        if final_confidence > 0.6 and final_confidence < 0.85:
-            final_confidence += 0.10
-
-        final_confidence = round(min(final_confidence, 0.99), 2)
         
         # Dynamic Explanation Generator
         if not is_ai:
             explanation = (
                 f"Signal lacks dynamic range (Variance: {amplitude_variance:.4f}). "
-                f"Low Zero-crossing rate ({zcr_rate:.3f}) suggests synthetic waveform generation."
+                f"Zero-crossing rate ({zcr_rate:.3f}) suggests synthetic waveform generation."
             )
         else:
+            final_score = 1.0 - final_score # Flip confidence for Human
             explanation = (
                 f"High dynamic amplitude detected (Variance: {amplitude_variance:.4f}). "
                 f"Natural silence ratio ({silence_ratio:.2f}) indicates organic speech patterns."
             )
 
-        return classification, final_confidence, explanation
+        return classification, round(final_score, 4), explanation
 
     except Exception as e:
         print(f"Analysis Error: {e}")
@@ -170,4 +154,3 @@ async def detect_voice(
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
