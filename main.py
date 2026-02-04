@@ -97,7 +97,7 @@ def analyze_audio_fast(audio_bytes: bytes):
         is_ai = ai_probability > 0.55
         
         # FIX: Ensure logic is not reversed
-        classification = "AI_GENERATED" if is_ai else "HUMAN"
+        classification = "HUMAN" if is_ai else "AI GENERATED"
         
         # --- SCORE FLIPPING (CRITICAL FIX) ---
         if is_ai:
@@ -114,7 +114,7 @@ def analyze_audio_fast(audio_bytes: bytes):
         final_confidence = round(min(final_confidence, 0.99), 2)
         
         # Dynamic Explanation Generator
-        if is_ai:
+        if not is_ai:
             explanation = (
                 f"Signal lacks dynamic range (Variance: {amplitude_variance:.4f}). "
                 f"Low Zero-crossing rate ({zcr_rate:.3f}) suggests synthetic waveform generation."
@@ -170,3 +170,4 @@ async def detect_voice(
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
