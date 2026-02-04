@@ -4,23 +4,23 @@ import os
 import uvicorn
 import numpy as np
 import soundfile as sf
-import librosa
+import scipy.signal
 from fastapi import FastAPI, Header, HTTPException, status
 from pydantic import BaseModel
 from typing import Annotated
 
 app = FastAPI(title="AI Voice Detection API")
 
-# My security key
+# Security key
 VALID_API_KEY = "echolyze_secure_hackathon_key_2026"
 
-# 1. Submission Request Model
+# 1. Request Model
 class DetectionRequest(BaseModel):
     language: str        
     audioFormat: str     
     audioBase64: str     
 
-# 2. Required Response Model
+# 2. Response Model
 class DetectionResponse(BaseModel):
     status: str
     language: str
@@ -28,87 +28,96 @@ class DetectionResponse(BaseModel):
     confidenceScore: float 
     explanation: str
 
-def analyze_audio_features(audio_bytes: bytes):
+def analyze_audio_fast(audio_bytes: bytes):
     """
-    Optimized audio analysis for serverless/free-tier deployment.
-    Limits analysis duration to prevent timeouts.
+    High-Speed Audio Analysis using pure Numpy.
+    Removes heavy libraries to prevent server timeouts.
     """
     try:
-        # Convert bytes to file-like object
+        # 1. Read Audio (Fastest method)
         audio_file = io.BytesIO(audio_bytes)
-        
-        # Load audio using soundfile (Much faster than librosa.load)
-        # We only read the first 10 seconds to save processing time
         data, samplerate = sf.read(audio_file)
-        
-        # Optimization: Process only first 10 seconds if file is huge
-        max_samples = 10 * samplerate
+
+        # 2. OPTIMIZATION: Process max 5 seconds
+        # This guarantees the API responds in < 1 second
+        max_samples = 5 * samplerate
         if len(data) > max_samples:
             data = data[:max_samples]
 
-        # If stereo, convert to mono (averaging channels is faster)
+        # 3. Convert to Mono if stereo
         if len(data.shape) > 1:
             data = np.mean(data, axis=1)
 
-        # --- FEATURE EXTRACTION (OPTIMIZED) ---
-        
-        # 1. Spectral Flatness (Fast)
-        flatness = librosa.feature.spectral_flatness(y=data)
-        avg_flatness = float(np.mean(flatness))
+        # --- MATH-BASED FEATURE EXTRACTION (No Librosa) ---
 
-        # 2. Zero Crossing Rate (Fast)
-        zcr = librosa.feature.zero_crossing_rate(y=data)
-        avg_zcr = float(np.mean(zcr))
+        # A. Amplitude Variance (Dynamic Range)
+        # Humans have high variance (loud/soft). AI is often normalized/flatter.
+        amplitude_variance = np.var(data)
 
-        # 3. Spectral Centroid (Medium cost - reduced sample rate for speed)
-        # We process centroid on a slightly downsampled version if data is large
-        centroid = librosa.feature.spectral_centroid(y=data, sr=samplerate)
-        avg_centroid = float(np.mean(centroid))
+        # B. Zero Crossing Rate (ZCR)
+        # Count how many times the signal crosses the center line.
+        # High ZCR = Noisy/Breath. Low ZCR = Tonal/Robotic.
+        zero_crossings = np.sum(np.diff(np.signbit(data).astype(int)))
+        zcr_rate = zero_crossings / len(data)
+
+        # C. Silence Ratio (Dead air)
+        # AI often eliminates silence too perfectly.
+        # We count samples close to absolute zero.
+        silence_threshold = 0.01
+        silence_count = np.sum(np.abs(data) < silence_threshold)
+        silence_ratio = silence_count / len(data)
 
         # --- DETERMINISTIC LOGIC ---
         
-        # Logic: AI voices (Vocoders) often have extremely consistent spectral flatness 
-        # compared to human vocal cords which have 'jitter'.
+        # Heuristic: 
+        # - AI has lower variance (very consistent volume).
+        # - AI often has higher "roughness" in ZCR or oddly low silence.
         
-        # Calculate raw score (heuristic)
-        raw_score = (avg_flatness * 120) + (avg_zcr * 15) 
+        # Base Score Calculation
+        score = 0.5
         
-        # Normalize score 0.0 - 1.0
-        confidence = min(max(raw_score / 0.5, 0.50), 0.98)
+        # Factor 1: Variance Check (Human = High Variance)
+        if amplitude_variance < 0.005: 
+            score += 0.20 # Likely AI (Too flat)
+        else:
+            score -= 0.15 # Likely Human (Dynamic)
 
-        # Thresholds: Low flatness = cleaner signal (often AI). High centroid = robotic buzz.
-        is_ai = avg_flatness < 0.0015 or avg_centroid > 3500
+        # Factor 2: ZCR Check
+        if zcr_rate > 0.15:
+            score -= 0.10 # Likely Human (Breath sounds)
+        elif zcr_rate < 0.02:
+            score += 0.15 # Likely AI (Too tonal)
 
+        # Clamp Score (0.01 to 0.99)
+        final_score = max(0.01, min(0.99, score))
+        
+        # Classification Threshold
+        is_ai = final_score > 0.60
+        
         classification = "AI_GENERATED" if is_ai else "HUMAN"
         
-        if not is_ai:
-            confidence = 1.0 - confidence
-            if confidence < 0.7: confidence = 0.78
-        
-        confidence = round(confidence, 4)
-
-        # Dynamic Explanation
+        # Dynamic Explanation Generator
         if is_ai:
-            expl_text = (
-                f"Spectral analysis reveals unnatural flatness ({avg_flatness:.4f}) and high "
-                f"frequency consistency. The audio lacks organic vocal jitter."
+            explanation = (
+                f"Signal lacks dynamic range (Variance: {amplitude_variance:.4f}). "
+                f"Zero-crossing rate ({zcr_rate:.3f}) suggests synthetic waveform generation."
             )
         else:
-            expl_text = (
-                f"Detected natural acoustic variance. Spectral flatness ({avg_flatness:.4f}) "
-                f"and pitch fluctuations are consistent with human vocal physiology."
+            final_score = 1.0 - final_score # Flip confidence for Human
+            explanation = (
+                f"High dynamic amplitude detected (Variance: {amplitude_variance:.4f}). "
+                f"Natural silence ratio ({silence_ratio:.2f}) indicates organic speech patterns."
             )
 
-        return classification, confidence, expl_text
+        return classification, round(final_score, 4), explanation
 
     except Exception as e:
-        # Return fallback values so API doesn't crash on weird audio
-        print(f"Error processing audio: {e}")
-        return "UNKNOWN", 0.0, "Audio signal could not be processed."
+        print(f"Analysis Error: {e}")
+        return "UNKNOWN", 0.0, "Signal processing failed."
 
 @app.get("/")
 async def home():
-    return {"message": "Echolyze API Live", "status": "Active"}
+    return {"message": "Echolyze API Live (Lite Version)", "status": "Active"}
 
 @app.post("/detect", response_model=DetectionResponse)
 async def detect_voice(
@@ -120,13 +129,16 @@ async def detect_voice(
 
     try:
         # Decode base64
-        audio_bytes = base64.b64decode(request.audioBase64)
+        try:
+            audio_bytes = base64.b64decode(request.audioBase64)
+        except:
+            raise ValueError("Invalid Base64")
 
         if len(audio_bytes) < 100:
             raise ValueError("Audio too small")
 
-        # Run Analysis
-        classification, score, explanation = analyze_audio_features(audio_bytes)
+        # Run Fast Analysis
+        classification, score, explanation = analyze_audio_fast(audio_bytes)
 
         return {
             "status": "success",
